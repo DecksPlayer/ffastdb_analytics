@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:ffastdb/ffastdb.dart';
 import 'package:ffastdb_analytics/ffastdb_analytics.dart';
 import 'package:test/test.dart';
@@ -499,6 +501,158 @@ void main() {
           .cumulativeSum('amount');
       // inactive: 20 + 50 = 70
       expect(pts.last.cumSum, equals(70.0));
+    });
+  });
+
+  // ── cumulativeSumStream ───────────────────────────────────────────────────
+  group('cumulativeSumStream', () {
+    late FastDB db;
+    setUp(() async => db = await _freshDb(_sales));
+    tearDown(() => db.close());
+
+    test('emits same final cumSum as cumulativeSum', () async {
+      final stream = await db.analytics.all
+          .cumulativeSumStream('amount')
+          .toList();
+      final batch = await db.analytics.all.cumulativeSum('amount');
+      expect(stream.last.cumSum, equals(batch.last.cumSum));
+    });
+
+    test('emits one point per document', () async {
+      final pts = await db.analytics.all
+          .cumulativeSumStream('amount')
+          .toList();
+      expect(pts, hasLength(6));
+    });
+
+    test('cumSum is non-decreasing', () async {
+      final pts = await db.analytics.all
+          .cumulativeSumStream('amount')
+          .toList();
+      for (int i = 1; i < pts.length; i++) {
+        expect(pts[i].cumSum, greaterThanOrEqualTo(pts[i - 1].cumSum));
+      }
+    });
+
+    test('indices are sequential starting at 0', () async {
+      final pts = await db.analytics.all
+          .cumulativeSumStream('amount')
+          .toList();
+      for (int i = 0; i < pts.length; i++) {
+        expect(pts[i].index, equals(i));
+      }
+    });
+
+    test('with orderBy delegates to batch and produces same result', () async {
+      final stream = await db.analytics.all
+          .cumulativeSumStream('amount', orderBy: 'amount')
+          .toList();
+      final batch = await db.analytics.all
+          .cumulativeSum('amount', orderBy: 'amount');
+      expect(stream.length, equals(batch.length));
+      expect(stream.last.cumSum, equals(batch.last.cumSum));
+    });
+  });
+
+  // ── watchGroupBy ──────────────────────────────────────────────────────────
+  group('watchGroupBy', () {
+    late FastDB db;
+    setUp(() async => db = await _freshDb(_sales, sortedIndexes: ['cat']));
+    tearDown(() => db.close());
+
+    test('emits initial aggregation synchronously', () async {
+      final first = await db.analytics.all
+          .watchGroupBy('cat', 'cat', {'total': aggSum('amount')})
+          .first;
+      expect(first, hasLength(3)); // A, B, C
+    });
+
+    test('re-emits after an insert', () async {
+      final results = <List<GroupByResult>>[];
+      final firstEmit = Completer<void>();
+      final secondEmit = Completer<void>();
+
+      final sub = db.analytics.all
+          .watchGroupBy('cat', 'cat', {'total': aggSum('amount')})
+          .listen((groups) {
+        results.add(groups);
+        if (results.length == 1 && !firstEmit.isCompleted) firstEmit.complete();
+        if (results.length == 2 && !secondEmit.isCompleted) secondEmit.complete();
+      });
+
+      // Wait for the initial aggregation to arrive
+      await firstEmit.future.timeout(const Duration(seconds: 5));
+      expect(results, hasLength(1));
+
+      // The async* generator pauses after the first yield and resumes on the
+      // next event-loop tick to register _db.watch(). Give it time to do so
+      // before mutating, otherwise the watcher won't exist yet.
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Trigger a mutation — watcher fires, watchGroupBy re-runs groupBy
+      await db.insert({'cat': 'A', 'region': 'N', 'amount': 100.0, 'active': true});
+
+      // Wait for the reactive re-emission
+      await secondEmit.future.timeout(const Duration(seconds: 5));
+
+      // A total must now be 10 + 20 + 100 = 130
+      final groupA = results.last.firstWhere((g) => g.key == 'A');
+      expect(groupA.aggregations['total'], equals(130.0));
+
+      await sub.cancel();
+    });
+  });
+
+  // ── watchHistogram ────────────────────────────────────────────────────────
+  group('watchHistogram', () {
+    late FastDB db;
+    setUp(() async => db = await _freshDb(_sales, sortedIndexes: ['amount']));
+    tearDown(() => db.close());
+
+    test('emits initial histogram with correct bin count', () async {
+      final first = await db.analytics.all
+          .watchHistogram('amount', 'amount', bins: 3)
+          .first;
+      expect(first, hasLength(3));
+    });
+
+    test('total count in initial histogram equals document count', () async {
+      final first = await db.analytics.all
+          .watchHistogram('amount', 'amount', bins: 5)
+          .first;
+      final total = first.fold(0, (s, b) => s + b.count);
+      expect(total, equals(6));
+    });
+
+    test('re-emits after an insert', () async {
+      final results = <List<HistogramBin>>[];
+      final firstEmit = Completer<void>();
+      final secondEmit = Completer<void>();
+
+      final sub = db.analytics.all
+          .watchHistogram('amount', 'amount', bins: 3)
+          .listen((bins) {
+        results.add(bins);
+        if (results.length == 1 && !firstEmit.isCompleted) firstEmit.complete();
+        if (results.length == 2 && !secondEmit.isCompleted) secondEmit.complete();
+      });
+
+      await firstEmit.future.timeout(const Duration(seconds: 5));
+      expect(results, hasLength(1));
+
+      // Same timing concern as watchGroupBy — let the generator register the
+      // watch subscription before triggering the mutation.
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      await db.insert({'cat': 'A', 'region': 'N', 'amount': 70.0, 'active': true});
+
+      await secondEmit.future.timeout(const Duration(seconds: 5));
+
+      // After insert total count across all bins must be 7
+      final total = results.last.fold(0, (s, b) => s + b.count);
+      expect(total, equals(7));
+
+      await sub.cancel();
     });
   });
 }

@@ -42,6 +42,25 @@ class AnalyticsQuery {
       .map((n) => n.toDouble())
       .toList();
 
+  /// Streams documents one at a time.
+  ///
+  /// When a [_filter] is set, delegates to [FastDB.findStream] so documents
+  /// are yielded lazily from storage rather than loading the entire result
+  /// set into a [List] first. For the unfiltered case the items from
+  /// [FastDB.getAll] are forwarded one by one to keep calling code uniform.
+  Stream<Map<String, dynamic>> _streamDocs() async* {
+    final f = _filter;
+    if (f != null) {
+      await for (final doc in _db.findStream(f)) {
+        if (doc is Map<String, dynamic>) yield doc;
+      }
+    } else {
+      for (final doc in await _db.getAll()) {
+        if (doc is Map<String, dynamic>) yield doc;
+      }
+    }
+  }
+
   // ─── Group By ─────────────────────────────────────────────────────────────
 
   /// Groups documents by [groupField] and computes [aggregations] per group.
@@ -57,12 +76,9 @@ class AnalyticsQuery {
     String groupField,
     Map<String, AggExpr> aggregations,
   ) async {
-    final docs = await _loadDocs();
     final groups = <dynamic, List<Map<String, dynamic>>>{};
-    for (final doc in docs) {
-      if (doc is Map<String, dynamic>) {
-        groups.putIfAbsent(doc[groupField], () => []).add(doc);
-      }
+    await for (final doc in _streamDocs()) {
+      groups.putIfAbsent(doc[groupField], () => []).add(doc);
     }
     return groups.entries.map((entry) {
       final aggs = {
@@ -272,6 +288,42 @@ class AnalyticsQuery {
     });
   }
 
+  /// Lazy streaming alternative to [cumulativeSum].
+  ///
+  /// Yields one [CumSumPoint] per document as it is read from storage,
+  /// without waiting for the entire collection to load. Ideal for large
+  /// collections or live-progress indicators in a Flutter UI.
+  ///
+  /// When [orderBy] is provided the entire sequence must be sorted first,
+  /// so the memory advantage only applies to the unordered case.
+  ///
+  /// ```dart
+  /// await for (final p in db.analytics.all.cumulativeSumStream('amount')) {
+  ///   updateUI(runningTotal: p.cumSum);
+  /// }
+  /// ```
+  Stream<CumSumPoint> cumulativeSumStream(
+    String valueField, {
+    String? orderBy,
+  }) async* {
+    if (orderBy != null) {
+      // Sorting requires all docs — delegate to the batch version.
+      for (final p in await cumulativeSum(valueField, orderBy: orderBy)) {
+        yield p;
+      }
+      return;
+    }
+    double cumSum = 0;
+    int i = 0;
+    await for (final doc in _streamDocs()) {
+      if (doc[valueField] is num) {
+        final val = (doc[valueField] as num).toDouble();
+        cumSum += val;
+        yield CumSumPoint(index: i++, value: val, cumSum: cumSum);
+      }
+    }
+  }
+
   // ─── Pivot ────────────────────────────────────────────────────────────────
 
   /// Cross-tabulation of [rowField] × [colField] aggregating [valueField].
@@ -291,13 +343,11 @@ class AnalyticsQuery {
     required String valueField,
     PivotAgg aggregation = PivotAgg.sum,
   }) async {
-    final docs = await _loadDocs();
     final rowKeys = <dynamic>{};
     final colKeys = <dynamic>{};
     final buckets = <dynamic, Map<dynamic, List<num>>>{};
 
-    for (final doc in docs) {
-      if (doc is! Map<String, dynamic>) continue;
+    await for (final doc in _streamDocs()) {
       final rowVal = doc[rowField];
       final colVal = doc[colField];
       final numVal = doc[valueField];
@@ -335,5 +385,57 @@ class AnalyticsQuery {
       PivotAgg.min => values.reduce((a, b) => a < b ? a : b),
       PivotAgg.max => values.reduce((a, b) => a > b ? a : b),
     };
+  }
+
+  // ─── Reactive ─────────────────────────────────────────────────────────────
+
+  /// Reactive [groupBy] that re-runs automatically whenever documents indexed
+  /// under [watchField] are inserted, updated, or deleted.
+  ///
+  /// Emits the initial aggregation immediately, then a fresh
+  /// [List<GroupByResult>] on every mutation.
+  ///
+  /// [watchField] **must** have a sorted index registered on the database
+  /// (`db.addSortedIndex(watchField)`) for the watcher to fire correctly.
+  ///
+  /// ```dart
+  /// // Flutter widget — live dashboard
+  /// db.analytics.all
+  ///     .watchGroupBy('type', 'type', {'total': aggSum('amount')})
+  ///     .listen((groups) => setState(() => _groups = groups));
+  /// ```
+  Stream<List<GroupByResult>> watchGroupBy(
+    String watchField,
+    String groupField,
+    Map<String, AggExpr> aggregations,
+  ) async* {
+    yield await groupBy(groupField, aggregations);
+    await for (final _ in _db.watch(watchField)) {
+      yield await groupBy(groupField, aggregations);
+    }
+  }
+
+  /// Reactive [histogram] that re-runs automatically whenever documents
+  /// indexed under [watchField] are inserted, updated, or deleted.
+  ///
+  /// Emits the initial histogram immediately, then a fresh
+  /// [List<HistogramBin>] on every mutation.
+  ///
+  /// [watchField] **must** have a sorted index registered on the database.
+  ///
+  /// ```dart
+  /// db.analytics.all
+  ///     .watchHistogram('amount', 'amount', bins: 8)
+  ///     .listen((bins) => setState(() => _hist = bins));
+  /// ```
+  Stream<List<HistogramBin>> watchHistogram(
+    String watchField,
+    String valueField, {
+    int bins = 10,
+  }) async* {
+    yield await histogram(valueField, bins: bins);
+    await for (final _ in _db.watch(watchField)) {
+      yield await histogram(valueField, bins: bins);
+    }
   }
 }

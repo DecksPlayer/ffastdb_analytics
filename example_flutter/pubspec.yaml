@@ -1,0 +1,22 @@
+name: ffastdb_analytics_example
+description: >
+  Flutter dashboard demo for ffastdb_analytics — live accounting ledger with
+  reactive groupBy, histograms, pivot tables, and cumulative cash flow.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffastdb:
+    path: ../../fastdb
+  ffastdb_analytics:
+    path: ../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
