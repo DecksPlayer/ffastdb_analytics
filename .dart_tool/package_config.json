@@ -63,7 +63,7 @@
     },
     {
       "name": "ffastdb",
-      "rootUri": "file:///C:/Users/gonoj/AppData/Local/Pub/Cache/hosted/pub.dev/ffastdb-0.1.0",
+      "rootUri": "../../fastdb",
       "packageUri": "lib/",
       "languageVersion": "3.11"
     },

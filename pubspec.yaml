@@ -3,7 +3,7 @@ description: >
   Analytical functions layer for ffastdb — groupBy, histogram, percentile,
   stddev, topN, rank, rolling average, cumulative sum, and pivot tables.
 version: 0.1.0
-repository: https://github.com/gonojuarez/ffastdb_analytics
+repository: https://github.com/DecksPlayer/ffastdb_analytics
 
 environment:
   sdk: ">=3.11.1 <4.0.0"

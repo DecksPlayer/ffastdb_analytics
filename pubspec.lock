@@ -84,10 +84,9 @@ packages:
   ffastdb:
     dependency: "direct main"
     description:
-      name: ffastdb
-      sha256: c807f388c2d2ad29f830b0cef6fbddbb187435ddf5882fee4c730c929af07270
-      url: "https://pub.dev"
-    source: hosted
+      path: "../fastdb"
+      relative: true
+    source: path
     version: "0.1.0"
   file:
     dependency: transitive
