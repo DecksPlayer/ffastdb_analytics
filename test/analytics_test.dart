@@ -86,6 +86,28 @@ void main() {
       }
     });
 
+    test('variance and stddev per category', () async {
+      // Category A: [10, 20] -> mean 15, var 25, sd 5
+      final groups = await db.analytics.all.groupBy('cat', {
+        'var': aggVariance('amount'),
+        'sd': aggStdDev('amount'),
+      });
+      final byKey = {for (final g in groups) g.key as String: g};
+      expect(byKey['A']!.aggregations['var'], equals(25.0));
+      expect(byKey['A']!.aggregations['sd'], equals(5.0));
+    });
+
+    test('median per category', () async {
+      // A: [10, 20] -> 15.0
+      // B: [30, 40] -> 35.0
+      final groups = await db.analytics.all.groupBy('cat', {
+        'med': aggMedian('amount'),
+      });
+      final byKey = {for (final g in groups) g.key as String: g};
+      expect(byKey['A']!.aggregations['med'], equals(15.0));
+      expect(byKey['B']!.aggregations['med'], equals(35.0));
+    });
+
     test('multiple aggregations in one call', () async {
       final groups = await db.analytics.all.groupBy('cat', {
         'total': aggSum('amount'),
@@ -93,11 +115,16 @@ void main() {
         'avg': aggAvg('amount'),
         'lo': aggMin('amount'),
         'hi': aggMax('amount'),
+        'var': aggVariance('amount'),
+        'sd': aggStdDev('amount'),
+        'med': aggMedian('amount'),
       });
       expect(groups, hasLength(3));
       for (final g in groups) {
-        expect(g.aggregations.keys,
-            containsAll(['total', 'n', 'avg', 'lo', 'hi']));
+        expect(
+            g.aggregations.keys,
+            containsAll(
+                ['total', 'n', 'avg', 'lo', 'hi', 'var', 'sd', 'med']));
       }
     });
   });
@@ -319,6 +346,16 @@ void main() {
       final pts = await db.analytics.all.rollingAvg('amount', window: 2);
       for (int i = 0; i < pts.length; i++) {
         expect(pts[i].index, equals(i));
+      }
+    });
+
+    test('rollingAvgStream emits same values as batch', () async {
+      final stream =
+          await db.analytics.all.rollingAvgStream('amount', window: 3).toList();
+      final batch = await db.analytics.all.rollingAvg('amount', window: 3);
+      expect(stream.length, equals(batch.length));
+      for (int i = 0; i < stream.length; i++) {
+        expect(stream[i].rollingValue, closeTo(batch[i].rollingValue, 1e-9));
       }
     });
   });

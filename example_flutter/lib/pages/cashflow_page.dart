@@ -34,30 +34,57 @@ class _CashFlowBody extends StatefulWidget {
 
 class _CashFlowBodyState extends State<_CashFlowBody> {
   final List<CumSumPoint> _points = [];
-  late final StreamSubscription<CumSumPoint> _sub;
+  StreamSubscription? _dbSub;
+  StreamSubscription? _pointsSub;
 
   @override
   void initState() {
     super.initState();
-    // Stream created once here — no double-subscription risk
+    _setupStream();
+    
+    // Watch for database changes and restart the analytical stream
+    _dbSub = widget.db.watch('monto').listen((_) {
+      if (mounted) _setupStream();
+    });
+  }
+
+  void _setupStream() {
+    _pointsSub?.cancel();
+    setState(() => _points.clear());
+    
     final stream = widget.db.analytics
         .where((q) => q.where('tipo').equals('INGRESO').findIds())
         .cumulativeSumStream('monto', orderBy: 'mes');
-    _sub = stream.listen((p) {
+        
+    _pointsSub = stream.listen((p) {
       if (mounted) setState(() => _points.add(p));
     });
   }
 
   @override
   void dispose() {
-    _sub.cancel();
+    _dbSub?.cancel();
+    _pointsSub?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     if (_points.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.show_chart_outlined, size: 64, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text('No hay ingresos registrados para mostrar el flujo', 
+              style: TextStyle(color: Colors.grey.shade600)),
+            const SizedBox(height: 8),
+            const Text('Agrega movimientos de tipo INGRESO para comenzar.', 
+              style: TextStyle(color: Colors.grey, fontSize: 12)),
+          ],
+        ),
+      );
     }
 
     final last = _points.last;

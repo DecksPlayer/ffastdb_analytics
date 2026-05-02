@@ -15,12 +15,11 @@ class PivotPage extends StatefulWidget {
 }
 
 class _PivotPageState extends State<PivotPage> {
-  late Future<PivotTable> _future;
-
-  @override
-  void initState() {
-    super.initState();
-    _future = _runPivot();
+  Stream<PivotTable> _pivotStream() async* {
+    yield await _runPivot();
+    await for (final _ in widget.db.watch('monto')) {
+      yield await _runPivot();
+    }
   }
 
   Future<PivotTable> _runPivot() => widget.db.analytics
@@ -32,26 +31,18 @@ class _PivotPageState extends State<PivotPage> {
         aggregation: PivotAgg.sum,
       );
 
-  void _refresh() => setState(() => _future = _runPivot());
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Pivot — Gastos por categoría × trimestre'),
         centerTitle: false,
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
-        ],
       ),
-      body: FutureBuilder<PivotTable>(
-        future: _future,
+      body: StreamBuilder<PivotTable>(
+        stream: _pivotStream(),
         builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
+          if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
-          }
-          if (snap.hasError) {
-            return Center(child: Text('Error: ${snap.error}'));
           }
           final table = snap.data!;
           return _PivotTableView(table: table);

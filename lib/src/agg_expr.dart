@@ -35,6 +35,24 @@ final class MaxAgg extends AggExpr {
   const MaxAgg(this.field);
 }
 
+/// Population variance of [field] within the group.
+final class VarianceAgg extends AggExpr {
+  final String field;
+  const VarianceAgg(this.field);
+}
+
+/// Population standard deviation of [field] within the group.
+final class StdDevAgg extends AggExpr {
+  final String field;
+  const StdDevAgg(this.field);
+}
+
+/// Median value of [field] within the group.
+final class MedianAgg extends AggExpr {
+  final String field;
+  const MedianAgg(this.field);
+}
+
 // ─── Convenience constructors ─────────────────────────────────────────────
 
 SumAgg aggSum(String field) => SumAgg(field);
@@ -42,6 +60,9 @@ AvgAgg aggAvg(String field) => AvgAgg(field);
 CountAgg aggCount() => const CountAgg();
 MinAgg aggMin(String field) => MinAgg(field);
 MaxAgg aggMax(String field) => MaxAgg(field);
+VarianceAgg aggVariance(String field) => VarianceAgg(field);
+StdDevAgg aggStdDev(String field) => StdDevAgg(field);
+MedianAgg aggMedian(String field) => MedianAgg(field);
 
 /// Aggregation mode used by [AnalyticsQuery.pivot].
-enum PivotAgg { sum, avg, count, min, max }
+enum PivotAgg { sum, avg, count, min, max, variance, stddev, median }

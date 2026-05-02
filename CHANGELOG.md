@@ -31,3 +31,20 @@ Initial release.
 **Scoping**
 - `AnalyticsCollection.all` — runs analytics over the entire collection.
 - `AnalyticsCollection.where(filter)` — pre-filters documents using any `ffastdb` query before analytics.
+
+## 0.1.1 — 2026-04-26
+
+### Added
+
+**Window functions**
+- `rollingAvgStream(valueField, {window, orderBy})` — lazily computes sliding window average as a stream.
+- `cumulativeSumStream(valueField, {orderBy})` — lazily computes running cumulative sum as a stream.
+- `rollingStdDev(valueField, {window, orderBy})` — sliding window standard deviation.
+- `rollingVariance(valueField, {window, orderBy})` — sliding window variance.
+- `rollingMin(valueField, {window, orderBy})` — sliding window minimum.
+- `rollingMax(valueField, {window, orderBy})` — sliding window maximum.
+- `rollingMedian(valueField, {window, orderBy})` — sliding window median.
+
+### Fixed
+
+- Some tests failed in Windows due to Windows-specific line endings in test golden files.

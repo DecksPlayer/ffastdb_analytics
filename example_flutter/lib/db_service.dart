@@ -12,15 +12,21 @@ import 'package:ffastdb/ffastdb.dart';
 ///   pagado     → bool
 class DbService {
   static Future<FastDB> init() async {
-    final db = await FfastDb.init(MemoryStorageStrategy());
+    // Usamos el singleton 'ffastdb' para una inicialización persistente 
+    // multiplataforma (IndexedDB en Web, WAL en Nativo).
+    final db = await ffastdb.init('ffastdb_analytics_demo');
 
+    // Registramos los índices necesarios para la reactividad y ordenamiento.
     db.addSortedIndex('tipo');
     db.addSortedIndex('mes');
     db.addSortedIndex('trimestre');
     db.addSortedIndex('monto');
     db.addSortedIndex('categoria');
 
-    await _seed(db);
+    // Forzamos el reindexado para asegurar que datos existentes sean procesados.
+    await db.reindex();
+
+    // await _seed(db); // Descomentar para sembrar datos iniciales si la DB está vacía
     return db;
   }
 

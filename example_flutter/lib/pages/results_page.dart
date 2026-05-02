@@ -15,21 +15,20 @@ class ResultsPage extends StatefulWidget {
 }
 
 class _ResultsPageState extends State<ResultsPage> {
-  List<_QuarterRow>? _rows;
-  double? _p90;
-  double? _sigma;
-  bool _loading = true;
 
-  @override
-  void initState() {
-    super.initState();
-    _load();
+
+
+  Stream<({List<_QuarterRow> rows, double? p90, double? sigma})> _resultsStream() async* {
+    // Yield initial data
+    yield await _fetchData();
+
+    // Re-yield whenever 'monto' (the main analytical field) changes
+    await for (final _ in widget.db.watch('monto')) {
+      yield await _fetchData();
+    }
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
-
-    // Run all queries in parallel
+  Future<({List<_QuarterRow> rows, double? p90, double? sigma})> _fetchData() async {
     final results = await Future.wait([
       db.analytics
           .where((q) => q.where('tipo').equals('INGRESO').findIds())
@@ -63,12 +62,11 @@ class _ResultsPageState extends State<ResultsPage> {
       return _QuarterRow(trimestre: t, ingresos: ing, gastos: gas);
     }).toList();
 
-    setState(() {
-      _rows   = rows;
-      _p90    = (results[2] as List<double?>).first;
-      _sigma  = (results[3] as List<double?>).first;
-      _loading = false;
-    });
+    return (
+      rows: rows,
+      p90: (results[2] as List<double?>).first,
+      sigma: (results[3] as List<double?>).first,
+    );
   }
 
   FastDB get db => widget.db;
@@ -79,36 +77,32 @@ class _ResultsPageState extends State<ResultsPage> {
       appBar: AppBar(
         title: const Text('Estado de Resultados'),
         centerTitle: false,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _load,
-          ),
-        ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                // ── Quarterly bars ──────────────────────────────────────────
-                const _SectionHeader('Ingresos vs Gastos por trimestre'),
-                const SizedBox(height: 12),
-                ...(_rows!.map((r) => _QuarterCard(row: r))),
-                const SizedBox(height: 24),
-
-                // ── Summary row ─────────────────────────────────────────────
-                const _SectionHeader('Totales del ejercicio'),
-                const SizedBox(height: 12),
-                _SummaryRow(rows: _rows!),
-                const SizedBox(height: 24),
-
-                // ── Statistical alerts ──────────────────────────────────────
-                const _SectionHeader('Alertas estadísticas — Gastos'),
-                const SizedBox(height: 12),
-                _StatCard(p90: _p90, sigma: _sigma),
-              ],
-            ),
+      body: StreamBuilder<({List<_QuarterRow> rows, double? p90, double? sigma})>(
+        stream: _resultsStream(),
+        builder: (context, snap) {
+          if (!snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final data = snap.data!;
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              const _SectionHeader('Ingresos vs Gastos por trimestre'),
+              const SizedBox(height: 12),
+              ...(data.rows.map((r) => _QuarterCard(row: r))),
+              const SizedBox(height: 24),
+              const _SectionHeader('Totales del ejercicio'),
+              const SizedBox(height: 12),
+              _SummaryRow(rows: data.rows),
+              const SizedBox(height: 24),
+              const _SectionHeader('Alertas estadísticas — Gastos'),
+              const SizedBox(height: 12),
+              _StatCard(p90: data.p90, sigma: data.sigma),
+            ],
+          );
+        },
+      ),
     );
   }
 }

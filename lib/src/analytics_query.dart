@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math' show sqrt;
 
 import 'package:ffastdb/ffastdb.dart';
@@ -36,7 +37,7 @@ class AnalyticsQuery {
   }
 
   List<double> _numericValues(List<dynamic> docs, String field) => docs
-      .whereType<Map<String, dynamic>>()
+      .whereType<Map>()
       .map((d) => d[field])
       .whereType<num>()
       .map((n) => n.toDouble())
@@ -52,11 +53,11 @@ class AnalyticsQuery {
     final f = _filter;
     if (f != null) {
       await for (final doc in _db.findStream(f)) {
-        if (doc is Map<String, dynamic>) yield doc;
+        if (doc is Map) yield Map<String, dynamic>.from(doc);
       }
     } else {
       for (final doc in await _db.getAll()) {
-        if (doc is Map<String, dynamic>) yield doc;
+        if (doc is Map) yield Map<String, dynamic>.from(doc);
       }
     }
   }
@@ -111,6 +112,31 @@ class AnalyticsQuery {
             docs.map((d) => d[field]).whereType<Comparable>().toList();
         if (vals.isEmpty) return null;
         return vals.reduce((a, b) => a.compareTo(b) > 0 ? a : b);
+      case VarianceAgg(:final field):
+        final vals = docs
+            .map((d) => d[field])
+            .whereType<num>()
+            .map((n) => n.toDouble())
+            .toList();
+        if (vals.isEmpty) return null;
+        final mean = vals.fold(0.0, (s, v) => s + v) / vals.length;
+        return vals.fold(0.0, (s, v) => s + (v - mean) * (v - mean)) /
+            vals.length;
+      case StdDevAgg(:final field):
+        final v = _applyGroupAgg(VarianceAgg(field), docs);
+        return v is double ? sqrt(v) : null;
+      case MedianAgg(:final field):
+        final vals = docs
+            .map((d) => d[field])
+            .whereType<num>()
+            .map((n) => n.toDouble())
+            .toList()
+          ..sort();
+        if (vals.isEmpty) return null;
+        final mid = vals.length ~/ 2;
+        return vals.length.isEven
+            ? (vals[mid - 1] + vals[mid]) / 2
+            : vals[mid];
     }
   }
 
@@ -174,7 +200,8 @@ class AnalyticsQuery {
     bool ascending = false,
   }) async {
     final docs = (await _loadDocs())
-        .whereType<Map<String, dynamic>>()
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
         .where((d) => d[field] is Comparable)
         .toList()
       ..sort((a, b) {
@@ -190,7 +217,8 @@ class AnalyticsQuery {
   /// Ties receive the same rank (standard competition ranking: 1, 1, 3…).
   Future<List<RankPoint>> rank(String field, {bool ascending = false}) async {
     final docs = (await _loadDocs())
-        .whereType<Map<String, dynamic>>()
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
         .where((d) => d[field] is Comparable)
         .toList();
 
@@ -234,7 +262,8 @@ class AnalyticsQuery {
   }) async {
     assert(window > 0, 'window must be > 0');
     final docs = (await _loadDocs())
-        .whereType<Map<String, dynamic>>()
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
         .where((d) => d[valueField] is num)
         .toList();
 
@@ -246,18 +275,63 @@ class AnalyticsQuery {
       });
     }
 
+    double currentSum = 0;
     return List.generate(docs.length, (i) {
-      final start = (i - window + 1).clamp(0, i);
-      final slice = docs.sublist(start, i + 1);
-      final avg =
-          slice.fold(0.0, (s, d) => s + (d[valueField] as num).toDouble()) /
-              slice.length;
+      final val = (docs[i][valueField] as num).toDouble();
+      currentSum += val;
+
+      if (i >= window) {
+        final out = (docs[i - window][valueField] as num).toDouble();
+        currentSum -= out;
+      }
+
+      final count = (i < window) ? (i + 1) : window;
       return RollingPoint(
         index: i,
-        value: (docs[i][valueField] as num).toDouble(),
-        rollingValue: avg,
+        value: val,
+        rollingValue: currentSum / count,
       );
     });
+  }
+
+  /// Lazy streaming alternative to [rollingAvg].
+  ///
+  /// Yields one [RollingPoint] per document as it is read from storage.
+  /// Uses a sliding window sum algorithm ($O(n)$ time, $O(window)$ memory).
+  Stream<RollingPoint> rollingAvgStream(
+    String valueField, {
+    required int window,
+    String? orderBy,
+  }) async* {
+    assert(window > 0, 'window must be > 0');
+    if (orderBy != null) {
+      for (final p in await rollingAvg(valueField, window: window, orderBy: orderBy)) {
+        yield p;
+      }
+      return;
+    }
+
+    double currentSum = 0;
+    final queue = Queue<double>();
+    int i = 0;
+
+    await for (final doc in _streamDocs()) {
+      if (doc[valueField] is num) {
+        final val = (doc[valueField] as num).toDouble();
+        currentSum += val;
+        queue.addLast(val);
+
+        if (queue.length > window) {
+          currentSum -= queue.removeFirst();
+        }
+
+        yield RollingPoint(
+          index: i++,
+          value: val,
+          rollingValue: currentSum / queue.length,
+        );
+      }
+    }
   }
 
   /// Running (cumulative) sum of [valueField].
@@ -268,7 +342,8 @@ class AnalyticsQuery {
     String? orderBy,
   }) async {
     final docs = (await _loadDocs())
-        .whereType<Map<String, dynamic>>()
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
         .where((d) => d[valueField] is num)
         .toList();
 
@@ -384,6 +459,23 @@ class AnalyticsQuery {
       PivotAgg.count => values.length,
       PivotAgg.min => values.reduce((a, b) => a < b ? a : b),
       PivotAgg.max => values.reduce((a, b) => a > b ? a : b),
+      PivotAgg.variance => () {
+          final vals = values.map((v) => v.toDouble()).toList();
+          final mean = vals.fold(0.0, (s, v) => s + v) / vals.length;
+          return vals.fold(0.0, (s, v) => s + (v - mean) * (v - mean)) /
+              vals.length;
+        }(),
+      PivotAgg.stddev => () {
+          final v = _applyPivotAgg(PivotAgg.variance, values);
+          return v is double ? sqrt(v) : null;
+        }(),
+      PivotAgg.median => () {
+          final vals = values.map((v) => v.toDouble()).toList()..sort();
+          final mid = vals.length ~/ 2;
+          return vals.length.isEven
+              ? (vals[mid - 1] + vals[mid]) / 2
+              : vals[mid];
+        }(),
     };
   }
 
