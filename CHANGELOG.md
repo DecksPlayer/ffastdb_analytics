@@ -48,3 +48,8 @@ Initial release.
 ### Fixed
 
 - Some tests failed in Windows due to Windows-specific line endings in test golden files.
+
+## 0.1.2 - 2026-05-26
+
+### featured
+ - migrate to ffastdb 0.2.7
